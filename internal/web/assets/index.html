@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Funnel Manager</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Tailscale Funnel Manager</h1>
+    <div class="controls">
+      <span id="status" class="status"></span>
+      <button id="refresh" type="button">Refresh</button>
+      <button id="signout" type="button">Sign out</button>
+    </div>
+  </header>
+  <main>
+    <table id="services">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Hostname</th>
+          <th>Path prefix</th>
+          <th>Tags</th>
+          <th>Funnel</th>
+          <th>Public URL</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p id="empty" class="empty" hidden>No services labeled <code>funnel-manager.toby.cloud/enabled=true</code> were found.</p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
