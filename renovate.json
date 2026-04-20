@@ -17,16 +17,5 @@
       "automerge": false,
       "minimumReleaseAge": "30 days"
     }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/renovate\\.yaml$/"
-      ],
-      "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*RENOVATE_VERSION:\\s*[\"'](?<currentValue>[^\"']+)[\"']"
-      ]
-    }
   ]
 }
