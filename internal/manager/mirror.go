@@ -92,6 +92,42 @@ func Build(source *networkingv1.Ingress, defaultTags string, funnelEnabled bool)
 	return mirror, nil
 }
 
+// BuildDesiredMirror returns the mirror that should exist for source while
+// preserving the current funnel annotation from an existing mirror.
+func BuildDesiredMirror(source *networkingv1.Ingress, defaultTags string, existing *networkingv1.Ingress) (*networkingv1.Ingress, error) {
+	if err := ValidateSource(source); err != nil {
+		return nil, err
+	}
+	funnelEnabled := false
+	if existing != nil && existing.Annotations[TSFunnel] == "true" {
+		funnelEnabled = true
+	}
+	desired, err := Build(source, defaultTags, funnelEnabled)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return desired, nil
+	}
+	desired.ResourceVersion = existing.ResourceVersion
+	desired.UID = existing.UID
+	desired.CreationTimestamp = existing.CreationTimestamp
+	desired.Labels = mergeStringMap(existing.Labels, desired.Labels)
+	desired.Annotations = mergeStringMap(existing.Annotations, desired.Annotations)
+	return desired, nil
+}
+
+func mergeStringMap(base, overlay map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range overlay {
+		out[k] = v
+	}
+	return out
+}
+
 func buildRules(source *networkingv1.Ingress, pathPrefix string) []networkingv1.IngressRule {
 	out := make([]networkingv1.IngressRule, 0, len(source.Spec.Rules))
 	for _, r := range source.Spec.Rules {
@@ -155,10 +191,23 @@ func ValidateSource(source *networkingv1.Ingress) error {
 	if len(source.Spec.Rules) == 0 {
 		return fmt.Errorf("source Ingress %s/%s has no rules", source.Namespace, source.Name)
 	}
-	for _, r := range source.Spec.Rules {
-		if r.HTTP != nil && len(r.HTTP.Paths) > 0 {
-			return nil
-		}
+	pathCount := countHTTPPaths(source)
+	if pathCount == 0 {
+		return fmt.Errorf("source Ingress %s/%s has no HTTP paths", source.Namespace, source.Name)
 	}
-	return fmt.Errorf("source Ingress %s/%s has no HTTP paths", source.Namespace, source.Name)
+	if source.Annotations[AnnPathPrefix] != "" && pathCount != 1 {
+		return fmt.Errorf("source Ingress %s/%s has path-prefix but %d HTTP paths; exactly one path is required", source.Namespace, source.Name, pathCount)
+	}
+	return nil
+}
+
+func countHTTPPaths(source *networkingv1.Ingress) int {
+	count := 0
+	for _, r := range source.Spec.Rules {
+		if r.HTTP == nil {
+			continue
+		}
+		count += len(r.HTTP.Paths)
+	}
+	return count
 }

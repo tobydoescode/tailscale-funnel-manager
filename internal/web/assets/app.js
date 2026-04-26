@@ -56,7 +56,9 @@
     tr.dataset.name = svc.name;
 
     const fqName = document.createElement("td");
-    fqName.innerHTML = `<code>${svc.namespace}/${svc.name}</code>`;
+    const fqCode = document.createElement("code");
+    fqCode.textContent = `${svc.namespace}/${svc.name}`;
+    fqName.appendChild(fqCode);
     tr.appendChild(fqName);
 
     const host = document.createElement("td");
@@ -68,7 +70,9 @@
     tr.appendChild(pp);
 
     const tags = document.createElement("td");
-    tags.innerHTML = `<code>${svc.tags || ""}</code>`;
+    const tagsCode = document.createElement("code");
+    tagsCode.textContent = svc.tags || "";
+    tags.appendChild(tagsCode);
     tr.appendChild(tags);
 
     const tg = document.createElement("td");
@@ -87,7 +91,12 @@
     const url = document.createElement("td");
     url.className = "url";
     if (svc.funnelEnabled && svc.funnelURL) {
-      url.innerHTML = `<a href="${svc.funnelURL}" target="_blank" rel="noopener">${svc.funnelURL}</a>`;
+      const link = document.createElement("a");
+      link.href = svc.funnelURL;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = svc.funnelURL;
+      url.appendChild(link);
     } else if (svc.funnelEnabled) {
       url.textContent = "on (no tailnet configured)";
     } else {

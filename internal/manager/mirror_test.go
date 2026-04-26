@@ -197,6 +197,40 @@ func TestBuild_FunnelDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredMirrorPreservesFunnelState(t *testing.T) {
+	src := sourceIngress()
+	src.Annotations[AnnHostname] = "litellm-new"
+	existing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      MirrorName(src.Name),
+			Namespace: src.Namespace,
+			Labels: map[string]string{
+				LabelManaged: "true",
+				LabelSource:  src.Name,
+			},
+			Annotations: map[string]string{
+				TSFunnel:   "true",
+				TSTags:     "tag:old",
+				TSHostname: "litellm-old",
+			},
+		},
+	}
+
+	desired, err := BuildDesiredMirror(src, "tag:default", existing)
+	if err != nil {
+		t.Fatalf("BuildDesiredMirror: %v", err)
+	}
+	if desired.Name != existing.Name || desired.Namespace != existing.Namespace {
+		t.Fatalf("desired identity changed: %s/%s", desired.Namespace, desired.Name)
+	}
+	if desired.Annotations[TSFunnel] != "true" {
+		t.Fatalf("funnel annotation = %q, want true", desired.Annotations[TSFunnel])
+	}
+	if desired.Annotations[TSHostname] != "litellm-new" {
+		t.Fatalf("hostname annotation = %q, want litellm-new", desired.Annotations[TSHostname])
+	}
+}
+
 func TestBuild_MissingHostname(t *testing.T) {
 	src := sourceIngress()
 	delete(src.Annotations, AnnHostname)
@@ -231,6 +265,17 @@ func TestValidateSource(t *testing.T) {
 		src.Spec.Rules[0].HTTP = nil
 		if err := ValidateSource(src); err == nil {
 			t.Errorf("expected error for no HTTP paths")
+		}
+	})
+	t.Run("path prefix with multiple paths is ambiguous", func(t *testing.T) {
+		src := sourceIngress()
+		src.Annotations[AnnPathPrefix] = "/v1"
+		src.Spec.Rules[0].HTTP.Paths = append(src.Spec.Rules[0].HTTP.Paths, src.Spec.Rules[0].HTTP.Paths[0])
+		src.Spec.Rules[0].HTTP.Paths[1].Path = "/admin"
+		src.Spec.Rules[0].HTTP.Paths[1].Backend.Service.Name = "admin-svc"
+
+		if err := ValidateSource(src); err == nil {
+			t.Fatalf("expected error for path-prefix with multiple HTTP paths")
 		}
 	})
 }

@@ -9,12 +9,12 @@ tasks:
   test:
     desc: Run Go unit tests (containerized; no local Go required)
     cmds:
-      - docker run --rm -v {{.TASKFILE_DIR}}:/src -w /src golang:1.23-alpine go test ./...
+      - docker run --rm -v {{.TASKFILE_DIR}}:/src -w /src golang:1.25-alpine go test ./...
 
   tidy:
     desc: Run go mod tidy (containerized)
     cmds:
-      - docker run --rm -v {{.TASKFILE_DIR}}:/src -w /src golang:1.23-alpine go mod tidy
+      - docker run --rm -v {{.TASKFILE_DIR}}:/src -w /src golang:1.25-alpine go mod tidy
 
   build:
     desc: Build funnel-manager ARM64 image

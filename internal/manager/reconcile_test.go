@@ -15,7 +15,8 @@ type fakeReconcileClient struct {
 	mirrors []networkingv1.Ingress
 	sources map[string]*networkingv1.Ingress // "<ns>/<name>"
 	deleted []string                         // "<ns>/<source>"
-	getErr  error                            // optional transient error for GetSource
+	updated []networkingv1.Ingress
+	getErr  error // optional transient error for GetSource
 }
 
 func (f *fakeReconcileClient) ListMirrors(_ context.Context) ([]networkingv1.Ingress, error) {
@@ -32,6 +33,10 @@ func (f *fakeReconcileClient) GetSource(_ context.Context, ns, name string) (*ne
 }
 func (f *fakeReconcileClient) DeleteMirror(_ context.Context, ns, sourceName string) error {
 	f.deleted = append(f.deleted, ns+"/"+sourceName)
+	return nil
+}
+func (f *fakeReconcileClient) UpdateMirror(_ context.Context, m *networkingv1.Ingress) error {
+	f.updated = append(f.updated, *m)
 	return nil
 }
 
@@ -127,5 +132,43 @@ func TestReconciler_SkipsMirrorWithoutSourceLabel(t *testing.T) {
 	r.reconcileOnce(context.Background())
 	if len(fc.deleted) != 0 {
 		t.Errorf("expected no deletions; got %v", fc.deleted)
+	}
+}
+
+func TestReconciler_UpdatesMirrorWhenSourceDrifts(t *testing.T) {
+	src := labeledSource("litellm", "litellm")
+	src.UID = "uid-1"
+	src.Annotations = map[string]string{AnnHostname: "litellm-new"}
+	pt := networkingv1.PathTypePrefix
+	src.Spec.Rules = []networkingv1.IngressRule{{
+		IngressRuleValue: networkingv1.IngressRuleValue{
+			HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+				Path:     "/",
+				PathType: &pt,
+				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+					Name: "litellm-svc",
+					Port: networkingv1.ServiceBackendPort{Number: 4000},
+				}},
+			}}},
+		},
+	}}
+	m := mirror("litellm", "litellm")
+	m.Annotations = map[string]string{TSFunnel: "true", TSHostname: "old", TSTags: "old"}
+	fc := &fakeReconcileClient{
+		mirrors: []networkingv1.Ingress{m},
+		sources: map[string]*networkingv1.Ingress{"litellm/litellm": src},
+	}
+	r := &Reconciler{Client: fc, DefaultTags: "tag:default"}
+
+	r.reconcileOnce(context.Background())
+
+	if len(fc.updated) != 1 {
+		t.Fatalf("updated len = %d, want 1", len(fc.updated))
+	}
+	if fc.updated[0].Annotations[TSFunnel] != "true" {
+		t.Fatalf("funnel state changed: %q", fc.updated[0].Annotations[TSFunnel])
+	}
+	if fc.updated[0].Annotations[TSHostname] != "litellm-new" {
+		t.Fatalf("hostname not repaired: %q", fc.updated[0].Annotations[TSHostname])
 	}
 }

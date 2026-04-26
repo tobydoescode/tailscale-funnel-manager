@@ -24,6 +24,7 @@ type Client interface {
 	GetSource(ctx context.Context, namespace, name string) (*networkingv1.Ingress, error)
 	GetMirror(ctx context.Context, namespace, sourceName string) (*networkingv1.Ingress, error)
 	CreateMirror(ctx context.Context, mirror *networkingv1.Ingress) error
+	UpdateMirror(ctx context.Context, mirror *networkingv1.Ingress) error
 	PatchFunnel(ctx context.Context, namespace, sourceName string, enabled bool) error
 	DeleteMirror(ctx context.Context, namespace, sourceName string) error
 	Ready(ctx context.Context) error
@@ -92,9 +93,11 @@ func (c *client) ListMirrors(ctx context.Context) ([]networkingv1.Ingress, error
 
 func (c *client) CreateMirror(ctx context.Context, mirror *networkingv1.Ingress) error {
 	_, err := c.cs.NetworkingV1().Ingresses(mirror.Namespace).Create(ctx, mirror, metav1.CreateOptions{FieldManager: "funnel-manager"})
-	if apierrors.IsAlreadyExists(err) {
-		return nil
-	}
+	return err
+}
+
+func (c *client) UpdateMirror(ctx context.Context, mirror *networkingv1.Ingress) error {
+	_, err := c.cs.NetworkingV1().Ingresses(mirror.Namespace).Update(ctx, mirror, metav1.UpdateOptions{FieldManager: "funnel-manager"})
 	return err
 }
 
