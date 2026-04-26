@@ -2,3 +2,5 @@
 *.test
 /bin/
 /dist/
+docs/superpowers
+.worktrees
