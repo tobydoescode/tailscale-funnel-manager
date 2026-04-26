@@ -1,0 +1,60 @@
+name: Image smoke
+description: Run a lightweight startup smoke test against the built image.
+
+inputs:
+  image-ref:
+    description: Local image reference to test.
+    required: false
+    default: tailscale-funnel-manager:smoke
+  artifact-suffix:
+    description: Suffix for uploaded artifact names.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Run image startup smoke test
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image-ref }}
+      run: |
+        set -euo pipefail
+        set +e
+        docker run --rm "$IMAGE_REF" > image-smoke.txt 2>&1
+        status=$?
+        set -e
+
+        cat image-smoke.txt
+        if [[ "$status" -eq 0 ]]; then
+          echo "expected image to fail fast without FUNNEL_MANAGER_TOKEN" >&2
+          exit 1
+        fi
+        if ! grep -q "FUNNEL_MANAGER_TOKEN env var is required" image-smoke.txt; then
+          echo "image did not reach the expected startup token validation" >&2
+          exit 1
+        fi
+
+    - name: Write smoke summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "## Image Smoke Test"
+          echo ""
+          if [[ -s image-smoke.txt ]]; then
+            echo '```'
+            tail -n 120 image-smoke.txt
+            echo '```'
+          else
+            echo "Image smoke test produced no output."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload image smoke report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: image-smoke-report${{ inputs.artifact-suffix }}
+        path: image-smoke.txt
+        if-no-files-found: warn

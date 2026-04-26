@@ -1,0 +1,84 @@
+name: Image security
+description: Run Trivy vulnerability scans against a local image.
+
+inputs:
+  image-ref:
+    description: Local image reference to scan.
+    required: false
+    default: tailscale-funnel-manager:smoke
+  severity:
+    description: Comma-separated severities to fail on.
+    required: false
+    default: CRITICAL,HIGH
+  exit-code:
+    description: Exit code for blocking vulnerability findings.
+    required: false
+    default: "1"
+  trivy-version:
+    description: Trivy CLI version to install.
+    required: false
+    default: v0.70.0
+  artifact-suffix:
+    description: Suffix for uploaded artifact names.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Trivy SARIF report
+      uses: aquasecurity/trivy-action@v0.35.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: sarif
+        output: trivy-results.sarif
+        severity: ${{ inputs.severity }}
+        exit-code: "0"
+        version: ${{ inputs.trivy-version }}
+
+    - name: Generate Trivy JSON report
+      uses: aquasecurity/trivy-action@v0.35.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: json
+        output: trivy-results.json
+        severity: ${{ inputs.severity }}
+        exit-code: "0"
+        version: ${{ inputs.trivy-version }}
+
+    - name: Scan image with Trivy
+      uses: aquasecurity/trivy-action@v0.35.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: table
+        output: trivy-results.txt
+        severity: ${{ inputs.severity }}
+        exit-code: ${{ inputs.exit-code }}
+        version: ${{ inputs.trivy-version }}
+
+    - name: Write image security summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "## Image Security"
+          echo ""
+          if [[ -s trivy-results.txt ]]; then
+            echo '```'
+            tail -n 120 trivy-results.txt
+            echo '```'
+          else
+            echo "Trivy table report produced no output."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload image security reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: image-security-reports${{ inputs.artifact-suffix }}
+        path: |
+          trivy-results.sarif
+          trivy-results.json
+          trivy-results.txt
+        if-no-files-found: warn

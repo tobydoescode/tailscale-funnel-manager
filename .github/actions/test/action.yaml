@@ -1,0 +1,60 @@
+name: Test and coverage
+description: Run Go tests and vet, then publish coverage artifacts.
+
+runs:
+  using: composite
+  steps:
+    - name: Install gotestsum
+      shell: bash
+      run: go install gotest.tools/gotestsum@latest
+
+    - name: Run Go tests with coverage
+      shell: bash
+      run: |
+        set -euo pipefail
+        gotestsum \
+          --junitfile go-test-results.xml \
+          --format testname \
+          -- \
+          -coverprofile=coverage.out \
+          -covermode=atomic \
+          ./...
+        go test ./internal/... -coverprofile=coverage-internal.out -covermode=atomic
+        go tool cover -html=coverage.out -o coverage.html
+        go tool cover -html=coverage-internal.out -o coverage-internal.html
+
+    - name: Run go vet
+      shell: bash
+      run: go vet ./...
+
+    - name: Write coverage summary
+      shell: bash
+      run: |
+        {
+          echo "## Test Coverage"
+          echo ""
+          echo "### Internal Packages"
+          echo ""
+          echo '```'
+          go tool cover -func=coverage-internal.out
+          echo '```'
+          echo ""
+          echo "### Whole Repository"
+          echo ""
+          echo '```'
+          go tool cover -func=coverage.out
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload test and coverage reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-and-coverage-reports
+        path: |
+          go-test-results.xml
+          coverage.out
+          coverage.html
+          coverage-internal.out
+          coverage-internal.html
+        if-no-files-found: warn
