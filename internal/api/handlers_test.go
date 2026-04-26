@@ -13,15 +13,19 @@ import (
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/manager"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 )
 
 // fakeKube implements kube.Client for tests without pulling in client-go fakes.
 type fakeKube struct {
-	mu      sync.Mutex
-	sources []networkingv1.Ingress
-	mirrors map[string]*networkingv1.Ingress // key "<ns>/<mirror-name>"
+	mu                   sync.Mutex
+	sources              []networkingv1.Ingress
+	mirrors              map[string]*networkingv1.Ingress // key "<ns>/<mirror-name>"
+	createErr            error
+	createConflictMirror *networkingv1.Ingress
 }
 
 func newFake(src ...networkingv1.Ingress) *fakeKube {
@@ -59,10 +63,23 @@ func (f *fakeKube) GetMirror(_ context.Context, ns, sourceName string) (*network
 func (f *fakeKube) CreateMirror(_ context.Context, m *networkingv1.Ingress) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		if f.createConflictMirror != nil {
+			f.mirrors[f.key(f.createConflictMirror.Namespace, f.createConflictMirror.Name)] = f.createConflictMirror
+		}
+		return f.createErr
+	}
 	// Simulate server-assigned UID so tests can detect accidental recreation.
 	if m.UID == "" {
 		m.UID = types.UID(fmt.Sprintf("mirror-uid-%d", len(f.mirrors)+1))
 	}
+	f.mirrors[f.key(m.Namespace, m.Name)] = m
+	return nil
+}
+
+func (f *fakeKube) UpdateMirror(_ context.Context, m *networkingv1.Ingress) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mirrors[f.key(m.Namespace, m.Name)] = m
 	return nil
 }
@@ -301,6 +318,25 @@ func TestSetFunnel_PatchInPlace(t *testing.T) {
 	}
 }
 
+func TestSetFunnel_PatchesAfterCreateConflict(t *testing.T) {
+	fk := newFake(sampleSource())
+	existing, err := manager.Build(&fk.sources[0], "tag:default", false)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	fk.createConflictMirror = existing
+	fk.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "ingresses"}, "litellm-funnel")
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	rec := postFunnel(h, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := fk.mirrors["litellm/litellm-funnel"].Annotations[manager.TSFunnel]; got != "true" {
+		t.Fatalf("funnel annotation = %q, want true", got)
+	}
+}
+
 func TestSetFunnel_RefusesUnlabeled(t *testing.T) {
 	// Source exists but lacks the opt-in label.
 	unlabeled := sampleSource()
@@ -315,6 +351,23 @@ func TestSetFunnel_RefusesUnlabeled(t *testing.T) {
 	h.SetFunnel(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSetFunnel_RefusesAmbiguousPathPrefix(t *testing.T) {
+	src := sampleSource()
+	src.Spec.Rules[0].HTTP.Paths = append(src.Spec.Rules[0].HTTP.Paths, src.Spec.Rules[0].HTTP.Paths[0])
+	src.Spec.Rules[0].HTTP.Paths[1].Path = "/admin"
+	src.Spec.Rules[0].HTTP.Paths[1].Backend.Service.Name = "admin-svc"
+	fk := newFake(src)
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	rec := postFunnel(h, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fk.mirrors) != 0 {
+		t.Fatalf("mirror should not be created for ambiguous path-prefix source")
 	}
 }
 

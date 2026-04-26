@@ -79,10 +79,10 @@ verbs:       ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ## Local development
 
-Go 1.23. No local toolchain required — tests and builds run in a container.
+Go 1.25. No local toolchain required — tests and builds run in a container.
 
 ```
-task test        # go test ./... inside golang:1.23-alpine
+task test        # go test ./... inside golang:1.25-alpine
 task tidy        # go mod tidy
 task build       # docker buildx build --platform linux/arm64
 task build-load  # build and load to local docker

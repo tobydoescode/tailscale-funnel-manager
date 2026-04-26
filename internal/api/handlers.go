@@ -13,6 +13,7 @@ import (
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/manager"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // Config wires a Handler's dependencies.
@@ -146,6 +147,15 @@ func (h *Handler) SetFunnel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.cfg.Kube.CreateMirror(ctx, built); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, req.Enabled); err != nil {
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				}
+				slog.Info("mirror existed after create race; funnel patched", "namespace", namespace, "name", name, "enabled", req.Enabled)
+				writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}

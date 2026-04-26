@@ -82,12 +82,15 @@ func main() {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	reconciler := &manager.Reconciler{Client: client, Interval: reconcileInterval}
+	reconciler := &manager.Reconciler{Client: client, DefaultTags: defaultTags, Interval: reconcileInterval}
 	go reconciler.Run(ctx)
 
 	errCh := make(chan error, 1)

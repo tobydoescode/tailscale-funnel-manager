@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -15,6 +16,7 @@ import (
 type reconcileClient interface {
 	ListMirrors(ctx context.Context) ([]networkingv1.Ingress, error)
 	GetSource(ctx context.Context, namespace, name string) (*networkingv1.Ingress, error)
+	UpdateMirror(ctx context.Context, mirror *networkingv1.Ingress) error
 	DeleteMirror(ctx context.Context, namespace, sourceName string) error
 }
 
@@ -24,8 +26,9 @@ type reconcileClient interface {
 // applies, and within one reconcile tick the mirror is deleted and the
 // tailnet device is decommissioned.
 type Reconciler struct {
-	Client   reconcileClient
-	Interval time.Duration
+	Client      reconcileClient
+	DefaultTags string
+	Interval    time.Duration
 }
 
 // Run loops until ctx is done. Safe to call in a goroutine.
@@ -68,32 +71,59 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 			// is from an older version or an external write — leave it.
 			continue
 		}
-		reason := r.shouldDelete(ctx, m.Namespace, sourceName)
-		if reason == "" {
+		src, reason := r.sourceForMirror(ctx, m.Namespace, sourceName)
+		if reason != "" {
+			if err := r.Client.DeleteMirror(ctx, m.Namespace, sourceName); err != nil {
+				slog.Error("reconciler: delete mirror", "namespace", m.Namespace, "source", sourceName, "err", err)
+				continue
+			}
+			slog.Info("reconciler: deleted orphan mirror", "namespace", m.Namespace, "source", sourceName, "reason", reason)
 			continue
 		}
-		if err := r.Client.DeleteMirror(ctx, m.Namespace, sourceName); err != nil {
-			slog.Error("reconciler: delete mirror", "namespace", m.Namespace, "source", sourceName, "err", err)
-			continue
-		}
-		slog.Info("reconciler: deleted orphan mirror", "namespace", m.Namespace, "source", sourceName, "reason", reason)
+		r.syncMirror(ctx, src, m)
 	}
 }
 
-// shouldDelete returns a non-empty reason string if the mirror for
-// namespace/sourceName should be garbage-collected, and "" otherwise.
-func (r *Reconciler) shouldDelete(ctx context.Context, namespace, sourceName string) string {
+// sourceForMirror returns the mirror's source and a non-empty deletion reason
+// when the mirror should be garbage-collected.
+func (r *Reconciler) sourceForMirror(ctx context.Context, namespace, sourceName string) (*networkingv1.Ingress, string) {
 	src, err := r.Client.GetSource(ctx, namespace, sourceName)
 	if apierrors.IsNotFound(err) {
-		return "source ingress deleted"
+		return nil, "source ingress deleted"
 	}
 	if err != nil {
 		// Transient error — do not delete on uncertain state.
 		slog.Warn("reconciler: get source failed; skipping", "namespace", namespace, "source", sourceName, "err", err)
-		return ""
+		return nil, ""
 	}
 	if src.Labels[LabelEnabled] != "true" {
-		return "source ingress no longer opted in"
+		return src, "source ingress no longer opted in"
 	}
-	return ""
+	return src, ""
+}
+
+func (r *Reconciler) syncMirror(ctx context.Context, src *networkingv1.Ingress, current *networkingv1.Ingress) {
+	if src == nil || current == nil {
+		return
+	}
+	desired, err := BuildDesiredMirror(src, r.DefaultTags, current)
+	if err != nil {
+		slog.Warn("reconciler: build desired mirror failed; skipping", "namespace", current.Namespace, "source", src.Name, "err", err)
+		return
+	}
+	if !mirrorNeedsUpdate(current, desired) {
+		return
+	}
+	if err := r.Client.UpdateMirror(ctx, desired); err != nil {
+		slog.Error("reconciler: update mirror", "namespace", desired.Namespace, "source", src.Name, "err", err)
+		return
+	}
+	slog.Info("reconciler: updated mirror", "namespace", desired.Namespace, "source", src.Name)
+}
+
+func mirrorNeedsUpdate(current, desired *networkingv1.Ingress) bool {
+	return !reflect.DeepEqual(current.Labels, desired.Labels) ||
+		!reflect.DeepEqual(current.Annotations, desired.Annotations) ||
+		!reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) ||
+		!reflect.DeepEqual(current.Spec, desired.Spec)
 }
