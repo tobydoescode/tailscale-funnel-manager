@@ -26,6 +26,8 @@ type fakeKube struct {
 	mirrors              map[string]*networkingv1.Ingress // key "<ns>/<mirror-name>"
 	createErr            error
 	createConflictMirror *networkingv1.Ingress
+	getMirrorErr         error
+	patches              int
 }
 
 func newFake(src ...networkingv1.Ingress) *fakeKube {
@@ -57,6 +59,9 @@ func (f *fakeKube) GetSource(_ context.Context, ns, name string) (*networkingv1.
 func (f *fakeKube) GetMirror(_ context.Context, ns, sourceName string) (*networkingv1.Ingress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getMirrorErr != nil {
+		return nil, f.getMirrorErr
+	}
 	return f.mirrors[f.key(ns, manager.MirrorName(sourceName))], nil
 }
 
@@ -104,6 +109,7 @@ func (f *fakeKube) ListMirrors(_ context.Context) ([]networkingv1.Ingress, error
 func (f *fakeKube) PatchFunnel(_ context.Context, ns, sourceName string, enabled bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.patches++
 	m, ok := f.mirrors[f.key(ns, manager.MirrorName(sourceName))]
 	if !ok {
 		return &notFoundError{}
@@ -334,6 +340,20 @@ func TestSetFunnel_PatchesAfterCreateConflict(t *testing.T) {
 	}
 	if got := fk.mirrors["litellm/litellm-funnel"].Annotations[manager.TSFunnel]; got != "true" {
 		t.Fatalf("funnel annotation = %q, want true", got)
+	}
+}
+
+func TestSetFunnel_DoesNotPatchWhenMirrorOwnershipInvalid(t *testing.T) {
+	fk := newFake(sampleSource())
+	fk.getMirrorErr = fmt.Errorf("ingress litellm/litellm-funnel exists but source label is %q, want %q", "other", "litellm")
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	rec := postFunnel(h, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if fk.patches != 0 {
+		t.Fatalf("patches = %d, want 0", fk.patches)
 	}
 }
 

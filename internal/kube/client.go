@@ -78,6 +78,9 @@ func (c *client) GetMirror(ctx context.Context, namespace, sourceName string) (*
 	if ing.Labels[manager.LabelManaged] != "true" {
 		return nil, fmt.Errorf("ingress %s/%s exists but is not managed by funnel-manager", namespace, ing.Name)
 	}
+	if ing.Labels[manager.LabelSource] != sourceName {
+		return nil, fmt.Errorf("ingress %s/%s exists but source label is %q, want %q", namespace, ing.Name, ing.Labels[manager.LabelSource], sourceName)
+	}
 	return ing, nil
 }
 
