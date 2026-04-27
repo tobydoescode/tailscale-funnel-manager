@@ -32,7 +32,7 @@ run_case() {
     printf 'change\n' >> "$tmp/$path"
     git -C "$tmp" add "$path"
     git -C "$tmp" commit --quiet -m "change $path"
-    value="$(cd "$tmp" && GITHUB_OUTPUT= ./scripts/docker-build-needed.sh "$base" HEAD)"
+    value="$(cd "$tmp" && GITHUB_OUTPUT='' ./scripts/docker-build-needed.sh "$base" HEAD)"
     if [[ "$value" != "build-needed=$want" ]]; then
         echo "$path: got $value, want build-needed=$want" >&2
         exit 1
