@@ -113,6 +113,8 @@ func BuildDesiredMirror(source *networkingv1.Ingress, defaultTags string, existi
 	desired.ResourceVersion = existing.ResourceVersion
 	desired.UID = existing.UID
 	desired.CreationTimestamp = existing.CreationTimestamp
+	desired.Generation = existing.Generation
+	desired.Finalizers = append([]string(nil), existing.Finalizers...)
 	desired.Labels = mergeStringMap(existing.Labels, desired.Labels)
 	desired.Annotations = mergeStringMap(existing.Annotations, desired.Annotations)
 	return desired, nil

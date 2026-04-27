@@ -231,6 +231,60 @@ func TestBuildDesiredMirrorPreservesFunnelState(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredMirrorPreservesLifecycleMetadata(t *testing.T) {
+	src := sourceIngress()
+	src.Annotations[AnnHostname] = "litellm-new"
+	created := metav1.Now()
+	existing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              MirrorName(src.Name),
+			Namespace:         src.Namespace,
+			UID:               types.UID("mirror-uid"),
+			ResourceVersion:   "42",
+			Generation:        7,
+			Finalizers:        []string{"tailscale.com/finalizer"},
+			CreationTimestamp: created,
+			Labels: map[string]string{
+				LabelManaged: "true",
+				LabelSource:  src.Name,
+				"external":   "keep",
+			},
+			Annotations: map[string]string{
+				TSFunnel:   "false",
+				TSTags:     "tag:old",
+				TSHostname: "litellm-old",
+				"external": "keep",
+			},
+		},
+	}
+
+	desired, err := BuildDesiredMirror(src, "tag:default", existing)
+	if err != nil {
+		t.Fatalf("BuildDesiredMirror: %v", err)
+	}
+	if desired.UID != existing.UID || desired.ResourceVersion != existing.ResourceVersion {
+		t.Fatalf("identity metadata not preserved")
+	}
+	if desired.Generation != existing.Generation {
+		t.Fatalf("generation = %d, want %d", desired.Generation, existing.Generation)
+	}
+	if !desired.CreationTimestamp.Equal(&created) {
+		t.Fatalf("creation timestamp = %v, want %v", desired.CreationTimestamp, created)
+	}
+	if len(desired.Finalizers) != 1 || desired.Finalizers[0] != "tailscale.com/finalizer" {
+		t.Fatalf("finalizers = %v, want tailscale finalizer", desired.Finalizers)
+	}
+	if desired.Annotations[TSFunnel] != "false" {
+		t.Fatalf("funnel annotation = %q, want false", desired.Annotations[TSFunnel])
+	}
+	if desired.Annotations["external"] != "keep" || desired.Labels["external"] != "keep" {
+		t.Fatalf("external metadata not preserved: labels=%v annotations=%v", desired.Labels, desired.Annotations)
+	}
+	if desired.Annotations[TSHostname] != "litellm-new" {
+		t.Fatalf("hostname annotation = %q, want litellm-new", desired.Annotations[TSHostname])
+	}
+}
+
 func TestBuild_MissingHostname(t *testing.T) {
 	src := sourceIngress()
 	delete(src.Annotations, AnnHostname)

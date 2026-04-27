@@ -153,6 +153,7 @@ func TestReconciler_UpdatesMirrorWhenSourceDrifts(t *testing.T) {
 		},
 	}}
 	m := mirror("litellm", "litellm")
+	m.Finalizers = []string{"tailscale.com/finalizer"}
 	m.Annotations = map[string]string{TSFunnel: "true", TSHostname: "old", TSTags: "old"}
 	fc := &fakeReconcileClient{
 		mirrors: []networkingv1.Ingress{m},
@@ -170,5 +171,43 @@ func TestReconciler_UpdatesMirrorWhenSourceDrifts(t *testing.T) {
 	}
 	if fc.updated[0].Annotations[TSHostname] != "litellm-new" {
 		t.Fatalf("hostname not repaired: %q", fc.updated[0].Annotations[TSHostname])
+	}
+	if len(fc.updated[0].Finalizers) != 1 || fc.updated[0].Finalizers[0] != "tailscale.com/finalizer" {
+		t.Fatalf("finalizers = %v, want tailscale finalizer", fc.updated[0].Finalizers)
+	}
+}
+
+func TestReconciler_UpdatesMirrorWithoutEnablingDisabledFunnel(t *testing.T) {
+	src := labeledSource("litellm", "litellm")
+	src.UID = "uid-1"
+	src.Annotations = map[string]string{AnnHostname: "litellm-new"}
+	pt := networkingv1.PathTypePrefix
+	src.Spec.Rules = []networkingv1.IngressRule{{
+		IngressRuleValue: networkingv1.IngressRuleValue{
+			HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+				Path:     "/",
+				PathType: &pt,
+				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+					Name: "litellm-svc",
+					Port: networkingv1.ServiceBackendPort{Number: 4000},
+				}},
+			}}},
+		},
+	}}
+	m := mirror("litellm", "litellm")
+	m.Annotations = map[string]string{TSFunnel: "false", TSHostname: "old", TSTags: "old"}
+	fc := &fakeReconcileClient{
+		mirrors: []networkingv1.Ingress{m},
+		sources: map[string]*networkingv1.Ingress{"litellm/litellm": src},
+	}
+	r := &Reconciler{Client: fc, DefaultTags: "tag:default"}
+
+	r.reconcileOnce(context.Background())
+
+	if len(fc.updated) != 1 {
+		t.Fatalf("updated len = %d, want 1", len(fc.updated))
+	}
+	if fc.updated[0].Annotations[TSFunnel] != "false" {
+		t.Fatalf("funnel annotation = %q, want false", fc.updated[0].Annotations[TSFunnel])
 	}
 }
