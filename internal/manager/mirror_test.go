@@ -278,6 +278,38 @@ func TestValidateSource(t *testing.T) {
 			t.Fatalf("expected error for path-prefix with multiple HTTP paths")
 		}
 	})
+	t.Run("path prefix must start with slash", func(t *testing.T) {
+		src := sourceIngress()
+		src.Annotations[AnnPathPrefix] = "v1"
+		if err := ValidateSource(src); err == nil {
+			t.Fatalf("expected error for path-prefix without leading slash")
+		}
+	})
+	t.Run("path prefix rejects surrounding whitespace", func(t *testing.T) {
+		for _, prefix := range []string{" /v1", "/v1 "} {
+			src := sourceIngress()
+			src.Annotations[AnnPathPrefix] = prefix
+			if err := ValidateSource(src); err == nil {
+				t.Fatalf("expected error for path-prefix %q", prefix)
+			}
+		}
+	})
+	t.Run("path prefix rejects control characters", func(t *testing.T) {
+		for _, prefix := range []string{"/v1\n", "/v1\t"} {
+			src := sourceIngress()
+			src.Annotations[AnnPathPrefix] = prefix
+			if err := ValidateSource(src); err == nil {
+				t.Fatalf("expected error for path-prefix %q", prefix)
+			}
+		}
+	})
+	t.Run("root path prefix is valid", func(t *testing.T) {
+		src := sourceIngress()
+		src.Annotations[AnnPathPrefix] = "/"
+		if err := ValidateSource(src); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestMirrorName(t *testing.T) {

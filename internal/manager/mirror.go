@@ -6,6 +6,7 @@ package manager
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -195,8 +196,30 @@ func ValidateSource(source *networkingv1.Ingress) error {
 	if pathCount == 0 {
 		return fmt.Errorf("source Ingress %s/%s has no HTTP paths", source.Namespace, source.Name)
 	}
-	if source.Annotations[AnnPathPrefix] != "" && pathCount != 1 {
+	pathPrefix := source.Annotations[AnnPathPrefix]
+	if err := validatePathPrefix(pathPrefix); err != nil {
+		return err
+	}
+	if pathPrefix != "" && pathCount != 1 {
 		return fmt.Errorf("source Ingress %s/%s has path-prefix but %d HTTP paths; exactly one path is required", source.Namespace, source.Name, pathCount)
+	}
+	return nil
+}
+
+func validatePathPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if strings.TrimSpace(prefix) != prefix {
+		return fmt.Errorf("path-prefix %q must not contain leading or trailing whitespace", prefix)
+	}
+	if prefix[0] != '/' {
+		return fmt.Errorf("path-prefix %q must start with /", prefix)
+	}
+	for _, r := range prefix {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("path-prefix %q must not contain ASCII control characters", prefix)
+		}
 	}
 	return nil
 }
