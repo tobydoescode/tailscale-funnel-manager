@@ -89,9 +89,10 @@ task build-load  # build and load to local docker
 task push        # build and push to ghcr.io/tobydoescode/tailscale-funnel-manager:<VERSION>
 ```
 
-Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI also builds
-multi-arch images (`linux/amd64`, `linux/arm64`) on every push to `main`
-via `.github/workflows/build-image.yaml`.
+Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI runs tests,
+coverage reporting, source security checks, image smoke tests, Trivy image
+scans, multi-arch image builds (`linux/amd64`, `linux/arm64`), and manifest
+merge via `.github/workflows/ci.yaml`.
 
 ## Deployment
 

@@ -18,7 +18,7 @@ FROM scratch
 COPY main.go ./
 COPY internal/ ./internal/
 DOCKERFILE
-touch "$tmp/go.mod" "$tmp/go.sum" "$tmp/main.go" "$tmp/internal/app/app.go" "$tmp/README.md"
+touch "$tmp/.dockerignore" "$tmp/go.mod" "$tmp/go.sum" "$tmp/main.go" "$tmp/internal/app/app.go" "$tmp/README.md"
 
 git -C "$tmp" add .
 git -C "$tmp" commit --quiet -m initial
@@ -45,4 +45,5 @@ run_case "main.go" true
 run_case "go.mod" true
 run_case "go.sum" true
 run_case "Dockerfile" true
+run_case ".dockerignore" true
 run_case "README.md" false
