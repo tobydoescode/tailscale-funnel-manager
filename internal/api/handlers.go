@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -97,7 +98,23 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 }
 
 type setFunnelRequest struct {
-	Enabled bool `json:"enabled"`
+	Enabled *bool `json:"enabled"`
+}
+
+func decodeSetFunnelRequest(r *http.Request) (bool, error) {
+	var req setFunnelRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return false, fmt.Errorf("invalid body: %w", err)
+	}
+	if req.Enabled == nil {
+		return false, errors.New("invalid body: enabled is required")
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return false, errors.New("invalid body: trailing JSON")
+	}
+	return *req.Enabled, nil
 }
 
 // SetFunnel handles POST /api/services/{namespace}/{name}/funnel.
@@ -110,15 +127,23 @@ func (h *Handler) SetFunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req setFunnelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	enabled, err := decodeSetFunnelRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
 	src, err := h.cfg.Kube.GetSource(ctx, namespace, name)
-	if err != nil {
+	if apierrors.IsNotFound(err) {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if apierrors.IsForbidden(err) {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if src.Labels[manager.LabelEnabled] != "true" {
@@ -141,34 +166,34 @@ func (h *Handler) SetFunnel(w http.ResponseWriter, r *http.Request) {
 		// First toggle for this source — create the mirror in the requested state.
 		// The tailnet device is minted here; subsequent toggles only patch the
 		// annotation so the device (and its tailnet-lock signature) persist.
-		built, err := manager.Build(src, h.cfg.DefaultTags, req.Enabled)
+		built, err := manager.Build(src, h.cfg.DefaultTags, enabled)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		if err := h.cfg.Kube.CreateMirror(ctx, built); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, req.Enabled); err != nil {
+				if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, enabled); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
-				slog.Info("mirror existed after create race; funnel patched", "namespace", namespace, "name", name, "enabled", req.Enabled)
-				writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+				slog.Info("mirror existed after create race; funnel patched", "namespace", namespace, "name", name, "enabled", enabled)
+				writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		slog.Info("mirror created", "namespace", namespace, "name", name, "enabled", req.Enabled)
+		slog.Info("mirror created", "namespace", namespace, "name", name, "enabled", enabled)
 	} else {
-		if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, req.Enabled); err != nil {
+		if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, enabled); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		slog.Info("funnel patched", "namespace", namespace, "name", name, "enabled", req.Enabled)
+		slog.Info("funnel patched", "namespace", namespace, "name", name, "enabled", enabled)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
 }
 
 func extractPaths(src *networkingv1.Ingress) []string {

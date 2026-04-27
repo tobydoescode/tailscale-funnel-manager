@@ -38,6 +38,7 @@ func main() {
 	}
 
 	tailnet := os.Getenv("FUNNEL_MANAGER_TAILNET")
+	kubeconfig := kubeconfigPath()
 
 	reconcileInterval := 60 * time.Second
 	if v := os.Getenv("FUNNEL_MANAGER_RECONCILE_INTERVAL"); v != "" {
@@ -49,7 +50,7 @@ func main() {
 		reconcileInterval = parsed
 	}
 
-	client, err := kube.NewInClusterClient()
+	client, err := kube.NewClient(kubeconfig)
 	if err != nil {
 		logger.Error("failed to build kubernetes client", "err", err)
 		os.Exit(1)
@@ -115,4 +116,11 @@ func main() {
 		logger.Error("shutdown error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func kubeconfigPath() string {
+	if v := os.Getenv("FUNNEL_MANAGER_KUBECONFIG"); v != "" {
+		return v
+	}
+	return os.Getenv("KUBECONFIG")
 }

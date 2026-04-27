@@ -33,6 +33,7 @@ runs:
         set -euo pipefail
         "$(go env GOPATH)/bin/actionlint"
         shellcheck scripts/*.sh
+        ./scripts/docker-build-needed_test.sh
 
     - name: Write source security summary
       if: always()

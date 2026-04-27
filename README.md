@@ -61,6 +61,7 @@ Environment variables (required unless noted):
 | `FUNNEL_MANAGER_ADDR` | `:8080` | Listen address |
 | `FUNNEL_MANAGER_DEFAULT_TAGS` | `tag:live-k3s-funnel` | Tailscale tags when a source Ingress doesn't specify its own |
 | `FUNNEL_MANAGER_TAILNET` | _unset_ | Tailnet domain (e.g. `taild6db24.ts.net`), used to render public URLs in the UI |
+| `FUNNEL_MANAGER_KUBECONFIG` | _unset_ | Local kubeconfig path for development; unset uses in-cluster service account config |
 | `FUNNEL_MANAGER_RECONCILE_INTERVAL` | `60s` | How often the orphan-GC reconciler runs (Go duration) |
 
 In production both `FUNNEL_MANAGER_TOKEN` and `FUNNEL_MANAGER_TAILNET` come
@@ -79,7 +80,8 @@ verbs:       ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ## Local development
 
-Go 1.26. No local toolchain required — tests and builds run in a container.
+Go 1.26. Tests and image builds run in a container; `task dev` uses the
+local Go toolchain.
 
 ```
 task test        # go test ./... inside golang:1.26-alpine
@@ -89,9 +91,23 @@ task build-load  # build and load to local docker
 task push        # build and push to ghcr.io/tobydoescode/tailscale-funnel-manager:<VERSION>
 ```
 
-Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI also builds
-multi-arch images (`linux/amd64`, `linux/arm64`) on every push to `main`
-via `.github/workflows/build-image.yaml`.
+To run the manager locally against your current Kubernetes context:
+
+```bash
+task dev:check
+FUNNEL_MANAGER_TAILNET=taild6db24.ts.net task dev
+```
+
+Then open `http://localhost:8080` and enter `dev` when prompted. The dev tasks
+use `FUNNEL_MANAGER_KUBECONFIG`, then `KUBECONFIG`, then `$HOME/.kube/config`.
+Override `FUNNEL_MANAGER_TOKEN` or `FUNNEL_MANAGER_ADDR` if needed. To check
+the API from another shell, run `task dev:services`.
+The kube identity in the selected context needs the Ingress RBAC listed below.
+
+Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI runs tests,
+coverage reporting, source security checks, image smoke tests, Trivy image
+scans, multi-arch image builds (`linux/amd64`, `linux/arm64`), and manifest
+merge via `.github/workflows/ci.yaml`.
 
 ## Deployment
 

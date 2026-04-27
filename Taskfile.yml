@@ -4,6 +4,7 @@ vars:
   IMAGE: ghcr.io/tobydoescode/tailscale-funnel-manager
   VERSION: 0.2.0
   PLATFORM: linux/arm64
+  LOCAL_URL: http://localhost:8080
 
 tasks:
   test:
@@ -30,3 +31,18 @@ tasks:
     desc: Build and load funnel-manager ARM64 image locally
     cmds:
       - docker buildx build --platform {{.PLATFORM}} -t {{.IMAGE}}:{{.VERSION}} --load .
+
+  dev:check:
+    desc: Check selected FUNNEL_MANAGER_KUBECONFIG, KUBECONFIG, or ~/.kube/config can list Ingresses
+    cmds:
+      - 'kubeconfig="${FUNNEL_MANAGER_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"; kubectl --kubeconfig "$kubeconfig" auth can-i list ingresses --all-namespaces'
+
+  dev:
+    desc: Run locally against FUNNEL_MANAGER_KUBECONFIG, KUBECONFIG, or ~/.kube/config
+    cmds:
+      - 'FUNNEL_MANAGER_TOKEN="${FUNNEL_MANAGER_TOKEN:-dev}" FUNNEL_MANAGER_KUBECONFIG="${FUNNEL_MANAGER_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}" FUNNEL_MANAGER_TAILNET="${FUNNEL_MANAGER_TAILNET:-}" FUNNEL_MANAGER_ADDR="${FUNNEL_MANAGER_ADDR:-:8080}" go run .'
+
+  dev:services:
+    desc: List opted-in services from a local running manager
+    cmds:
+      - 'curl -fsS -H "Authorization: Bearer ${FUNNEL_MANAGER_TOKEN:-dev}" "{{.LOCAL_URL}}/api/services"'
