@@ -61,6 +61,7 @@ Environment variables (required unless noted):
 | `FUNNEL_MANAGER_ADDR` | `:8080` | Listen address |
 | `FUNNEL_MANAGER_DEFAULT_TAGS` | `tag:live-k3s-funnel` | Tailscale tags when a source Ingress doesn't specify its own |
 | `FUNNEL_MANAGER_TAILNET` | _unset_ | Tailnet domain (e.g. `taild6db24.ts.net`), used to render public URLs in the UI |
+| `FUNNEL_MANAGER_KUBECONFIG` | _unset_ | Local kubeconfig path for development; unset uses in-cluster service account config |
 | `FUNNEL_MANAGER_RECONCILE_INTERVAL` | `60s` | How often the orphan-GC reconciler runs (Go duration) |
 
 In production both `FUNNEL_MANAGER_TOKEN` and `FUNNEL_MANAGER_TAILNET` come
@@ -88,6 +89,18 @@ task build       # docker buildx build --platform linux/arm64
 task build-load  # build and load to local docker
 task push        # build and push to ghcr.io/tobydoescode/tailscale-funnel-manager:<VERSION>
 ```
+
+To run the manager locally against your current Kubernetes context:
+
+```bash
+FUNNEL_MANAGER_TOKEN=dev \
+FUNNEL_MANAGER_KUBECONFIG="$HOME/.kube/config" \
+FUNNEL_MANAGER_TAILNET=taild6db24.ts.net \
+go run .
+```
+
+Then open `http://localhost:8080` and enter `dev` when prompted. The kube
+identity in the selected context needs the Ingress RBAC listed below.
 
 Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI runs tests,
 coverage reporting, source security checks, image smoke tests, Trivy image

@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Client is the narrow interface exposed to handlers.
@@ -34,17 +35,38 @@ type client struct {
 	cs kubernetes.Interface
 }
 
-// NewInClusterClient builds a Client using the pod's in-cluster config.
-func NewInClusterClient() (Client, error) {
-	cfg, err := rest.InClusterConfig()
+// NewClient builds a Client from kubeconfig when provided, otherwise from the
+// pod's in-cluster config.
+func NewClient(kubeconfig string) (Client, error) {
+	cfg, err := buildConfig(kubeconfig)
 	if err != nil {
-		return nil, fmt.Errorf("in-cluster config: %w", err)
+		return nil, err
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("clientset: %w", err)
 	}
 	return &client{cs: cs}, nil
+}
+
+// NewInClusterClient builds a Client using the pod's in-cluster config.
+func NewInClusterClient() (Client, error) {
+	return NewClient("")
+}
+
+func buildConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig != "" {
+		cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("kubeconfig %q: %w", kubeconfig, err)
+		}
+		return cfg, nil
+	}
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster config: %w", err)
+	}
+	return cfg, nil
 }
 
 // NewClientFromClientset wraps an existing clientset. Useful in tests.
