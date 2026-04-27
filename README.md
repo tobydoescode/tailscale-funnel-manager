@@ -80,7 +80,8 @@ verbs:       ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ## Local development
 
-Go 1.26. No local toolchain required — tests and builds run in a container.
+Go 1.26. Tests and image builds run in a container; `task dev` uses the
+local Go toolchain.
 
 ```
 task test        # go test ./... inside golang:1.26-alpine
@@ -93,14 +94,15 @@ task push        # build and push to ghcr.io/tobydoescode/tailscale-funnel-manag
 To run the manager locally against your current Kubernetes context:
 
 ```bash
-FUNNEL_MANAGER_TOKEN=dev \
-FUNNEL_MANAGER_KUBECONFIG="$HOME/.kube/config" \
-FUNNEL_MANAGER_TAILNET=taild6db24.ts.net \
-go run .
+task dev:check
+FUNNEL_MANAGER_TAILNET=taild6db24.ts.net task dev
 ```
 
-Then open `http://localhost:8080` and enter `dev` when prompted. The kube
-identity in the selected context needs the Ingress RBAC listed below.
+Then open `http://localhost:8080` and enter `dev` when prompted. The dev tasks
+use `FUNNEL_MANAGER_KUBECONFIG`, then `KUBECONFIG`, then `$HOME/.kube/config`.
+Override `FUNNEL_MANAGER_TOKEN` or `FUNNEL_MANAGER_ADDR` if needed. To check
+the API from another shell, run `task dev:services`.
+The kube identity in the selected context needs the Ingress RBAC listed below.
 
 Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI runs tests,
 coverage reporting, source security checks, image smoke tests, Trivy image

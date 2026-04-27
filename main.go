@@ -38,7 +38,7 @@ func main() {
 	}
 
 	tailnet := os.Getenv("FUNNEL_MANAGER_TAILNET")
-	kubeconfig := os.Getenv("FUNNEL_MANAGER_KUBECONFIG")
+	kubeconfig := kubeconfigPath()
 
 	reconcileInterval := 60 * time.Second
 	if v := os.Getenv("FUNNEL_MANAGER_RECONCILE_INTERVAL"); v != "" {
@@ -116,4 +116,11 @@ func main() {
 		logger.Error("shutdown error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func kubeconfigPath() string {
+	if v := os.Getenv("FUNNEL_MANAGER_KUBECONFIG"); v != "" {
+		return v
+	}
+	return os.Getenv("KUBECONFIG")
 }
