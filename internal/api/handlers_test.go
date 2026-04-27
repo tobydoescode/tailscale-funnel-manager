@@ -27,6 +27,7 @@ type fakeKube struct {
 	createErr            error
 	createConflictMirror *networkingv1.Ingress
 	getMirrorErr         error
+	getSourceErr         error
 	patches              int
 }
 
@@ -47,6 +48,9 @@ func (f *fakeKube) ListSources(_ context.Context) ([]networkingv1.Ingress, error
 func (f *fakeKube) GetSource(_ context.Context, ns, name string) (*networkingv1.Ingress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getSourceErr != nil {
+		return nil, f.getSourceErr
+	}
 	for i := range f.sources {
 		if f.sources[i].Namespace == ns && f.sources[i].Name == name {
 			cp := f.sources[i]
@@ -207,6 +211,15 @@ func postFunnel(h *Handler, enabled bool) *httptest.ResponseRecorder {
 	if enabled {
 		body = `{"enabled":true}`
 	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/services/litellm/litellm/funnel", strings.NewReader(body))
+	req.SetPathValue("namespace", "litellm")
+	req.SetPathValue("name", "litellm")
+	h.SetFunnel(rec, req)
+	return rec
+}
+
+func postFunnelBody(h *Handler, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/services/litellm/litellm/funnel", strings.NewReader(body))
 	req.SetPathValue("namespace", "litellm")
@@ -402,5 +415,56 @@ func TestSetFunnel_BadBody(t *testing.T) {
 	h.SetFunnel(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSetFunnel_RequiresExplicitEnabledBoolean(t *testing.T) {
+	cases := []string{
+		`{}`,
+		`{"enabled":"true"}`,
+		`{"enabled":true,"extra":1}`,
+		`{"enabled":true}{"enabled":false}`,
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			fk := newFake(sampleSource())
+			h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+			rec := postFunnelBody(h, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if len(fk.mirrors) != 0 {
+				t.Fatalf("mirror should not be created for invalid body")
+			}
+		})
+	}
+}
+
+func TestSetFunnel_MapsSourceLookupErrors(t *testing.T) {
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "ingresses"}, "litellm", fmt.Errorf("denied"))
+	generic := fmt.Errorf("api server unavailable")
+
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "not found", err: apierrors.NewNotFound(schema.GroupResource{Resource: "ingresses"}, "litellm"), want: http.StatusNotFound},
+		{name: "forbidden", err: forbidden, want: http.StatusForbidden},
+		{name: "generic", err: generic, want: http.StatusInternalServerError},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fk := newFake(sampleSource())
+			fk.getSourceErr = tc.err
+			h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+			rec := postFunnel(h, true)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
 	}
 }
