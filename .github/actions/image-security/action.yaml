@@ -27,7 +27,7 @@ runs:
   using: composite
   steps:
     - name: Generate Trivy SARIF report
-      uses: aquasecurity/trivy-action@v0.35.0
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: ${{ inputs.image-ref }}
         format: sarif
@@ -37,7 +37,7 @@ runs:
         version: ${{ inputs.trivy-version }}
 
     - name: Generate Trivy JSON report
-      uses: aquasecurity/trivy-action@v0.35.0
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: ${{ inputs.image-ref }}
         format: json
@@ -47,7 +47,7 @@ runs:
         version: ${{ inputs.trivy-version }}
 
     - name: Scan image with Trivy
-      uses: aquasecurity/trivy-action@v0.35.0
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: ${{ inputs.image-ref }}
         format: table
