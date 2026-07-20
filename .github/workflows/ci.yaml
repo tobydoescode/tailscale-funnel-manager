@@ -128,16 +128,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push validated arch image
+      # Push by digest only — no permanent per-arch scratch tags in GHCR.
+      # Full cache hit from the candidate build above.
+      - name: Push validated image by digest
+        id: push
         if: github.event_name != 'pull_request'
-        run: docker push "${{ env.IMAGE }}:arch-${{ matrix.arch }}-sha-${{ github.sha }}"
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=build-${{ matrix.arch }}
 
       - name: Export digest
         if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="$(docker buildx imagetools inspect "${{ env.IMAGE }}:arch-${{ matrix.arch }}-sha-${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - uses: actions/upload-artifact@v7
         if: github.event_name != 'pull_request'

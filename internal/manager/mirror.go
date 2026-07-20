@@ -188,8 +188,12 @@ func ValidateSource(source *networkingv1.Ingress) error {
 	if source == nil {
 		return errors.New("nil Ingress")
 	}
-	if source.Annotations[AnnHostname] == "" {
+	hostname := source.Annotations[AnnHostname]
+	if hostname == "" {
 		return ErrMissingHostname
+	}
+	if err := validateHostname(hostname); err != nil {
+		return err
 	}
 	if len(source.Spec.Rules) == 0 {
 		return fmt.Errorf("source Ingress %s/%s has no rules", source.Namespace, source.Name)
@@ -204,6 +208,24 @@ func ValidateSource(source *networkingv1.Ingress) error {
 	}
 	if pathPrefix != "" && pathCount != 1 {
 		return fmt.Errorf("source Ingress %s/%s has path-prefix but %d HTTP paths; exactly one path is required", source.Namespace, source.Name, pathCount)
+	}
+	return nil
+}
+
+// validateHostname requires an RFC 1123 DNS label: the Tailscale operator
+// rejects anything else, invisibly to the UI, and the value is interpolated
+// into the public funnel URL.
+func validateHostname(hostname string) error {
+	if len(hostname) > 63 {
+		return fmt.Errorf("hostname %q must be at most 63 characters", hostname)
+	}
+	if hostname[0] == '-' || hostname[len(hostname)-1] == '-' {
+		return fmt.Errorf("hostname %q must not start or end with a hyphen", hostname)
+	}
+	for _, r := range hostname {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return fmt.Errorf("hostname %q must be a lowercase DNS label (a-z, 0-9, hyphens)", hostname)
+		}
 	}
 	return nil
 }

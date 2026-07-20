@@ -57,6 +57,24 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	mirrors, err := h.cfg.Kube.ListMirrors(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Join mirrors by source in memory: two API calls total instead of one
+	// GetMirror per source on every poll. Same ownership assertions as
+	// GetMirror, minus detection of unmanaged name collisions (the toggle
+	// path still catches those).
+	mirrorsBySource := make(map[string]*networkingv1.Ingress, len(mirrors))
+	for i := range mirrors {
+		m := &mirrors[i]
+		sourceName := m.Labels[manager.LabelSource]
+		if m.Labels[manager.LabelManaged] != "true" || sourceName == "" || m.Name != manager.MirrorName(sourceName) {
+			continue
+		}
+		mirrorsBySource[m.Namespace+"/"+sourceName] = m
+	}
 
 	sort.Slice(sources, func(i, j int) bool {
 		if sources[i].Namespace != sources[j].Namespace {
@@ -82,10 +100,8 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		if err := manager.ValidateSource(src); err != nil {
 			view.Error = err.Error()
 		}
-		mirror, err := h.cfg.Kube.GetMirror(ctx, src.Namespace, src.Name)
-		if err != nil {
-			view.Error = err.Error()
-		} else if mirror != nil && mirror.Annotations[manager.TSFunnel] == "true" {
+		mirror := mirrorsBySource[src.Namespace+"/"+src.Name]
+		if mirror != nil && mirror.Annotations[manager.TSFunnel] == "true" {
 			view.FunnelEnabled = true
 			if h.cfg.Tailnet != "" && view.Hostname != "" {
 				view.FunnelURL = fmt.Sprintf("https://%s.%s%s", view.Hostname, h.cfg.Tailnet, view.PathPrefix)
@@ -127,6 +143,7 @@ func (h *Handler) SetFunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	enabled, err := decodeSetFunnelRequest(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -173,6 +190,17 @@ func (h *Handler) SetFunnel(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.cfg.Kube.CreateMirror(ctx, built); err != nil {
 			if apierrors.IsAlreadyExists(err) {
+				// Re-fetch to re-run GetMirror's ownership checks before
+				// patching: the conflicting Ingress may not be ours.
+				existing, getErr := h.cfg.Kube.GetMirror(ctx, namespace, name)
+				if getErr != nil {
+					writeError(w, http.StatusInternalServerError, getErr)
+					return
+				}
+				if existing == nil {
+					writeError(w, http.StatusConflict, fmt.Errorf("ingress %s/%s changed while toggling; retry", namespace, manager.MirrorName(name)))
+					return
+				}
 				if err := h.cfg.Kube.PatchFunnel(ctx, namespace, name, enabled); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return

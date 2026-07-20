@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/tobydoescode/tailscale-funnel-manager/internal/metrics"
+
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -29,6 +31,11 @@ type Reconciler struct {
 	Client      reconcileClient
 	DefaultTags string
 	Interval    time.Duration
+
+	// updatedLastPass tracks mirrors updated on the previous pass so a
+	// mirror that needs an update every tick (an update loop, usually from
+	// API-server field normalization) is visible in the logs.
+	updatedLastPass map[string]bool
 }
 
 // Run loops until ctx is done. Safe to call in a goroutine.
@@ -61,14 +68,23 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 	mirrors, err := r.Client.ListMirrors(ctx)
 	if err != nil {
 		slog.Error("reconciler: list mirrors", "err", err)
+		metrics.ReconcileRuns.Inc("error")
 		return
 	}
+	updatedThisPass := map[string]bool{}
 	for i := range mirrors {
 		m := &mirrors[i]
 		sourceName := m.Labels[LabelSource]
 		if sourceName == "" {
 			// Our Build always stamps LabelSource; a mirror without it
 			// is from an older version or an external write — leave it.
+			continue
+		}
+		if m.Name != MirrorName(sourceName) {
+			// DeleteMirror resolves the name from the source label; if that
+			// disagrees with the object we actually found, acting on it
+			// would hit the wrong Ingress.
+			slog.Warn("reconciler: mirror name does not match source label; skipping", "namespace", m.Namespace, "name", m.Name, "source", sourceName)
 			continue
 		}
 		src, reason := r.sourceForMirror(ctx, m.Namespace, sourceName)
@@ -78,10 +94,19 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 				continue
 			}
 			slog.Info("reconciler: deleted orphan mirror", "namespace", m.Namespace, "source", sourceName, "reason", reason)
+			metrics.OrphansDeleted.Inc()
 			continue
 		}
-		r.syncMirror(ctx, src, m)
+		if r.syncMirror(ctx, src, m) {
+			key := m.Namespace + "/" + m.Name
+			updatedThisPass[key] = true
+			if r.updatedLastPass[key] {
+				slog.Warn("reconciler: mirror updated on consecutive passes; possible update loop", "namespace", m.Namespace, "name", m.Name)
+			}
+		}
 	}
+	r.updatedLastPass = updatedThisPass
+	metrics.ReconcileRuns.Inc("ok")
 }
 
 // sourceForMirror returns the mirror's source and a non-empty deletion reason
@@ -102,23 +127,25 @@ func (r *Reconciler) sourceForMirror(ctx context.Context, namespace, sourceName 
 	return src, ""
 }
 
-func (r *Reconciler) syncMirror(ctx context.Context, src *networkingv1.Ingress, current *networkingv1.Ingress) {
+// syncMirror reports whether it updated the mirror.
+func (r *Reconciler) syncMirror(ctx context.Context, src *networkingv1.Ingress, current *networkingv1.Ingress) bool {
 	if src == nil || current == nil {
-		return
+		return false
 	}
 	desired, err := BuildDesiredMirror(src, r.DefaultTags, current)
 	if err != nil {
 		slog.Warn("reconciler: build desired mirror failed; skipping", "namespace", current.Namespace, "source", src.Name, "err", err)
-		return
+		return false
 	}
 	if !mirrorNeedsUpdate(current, desired) {
-		return
+		return false
 	}
 	if err := r.Client.UpdateMirror(ctx, desired); err != nil {
 		slog.Error("reconciler: update mirror", "namespace", desired.Namespace, "source", src.Name, "err", err)
-		return
+		return false
 	}
 	slog.Info("reconciler: updated mirror", "namespace", desired.Namespace, "source", src.Name)
+	return true
 }
 
 func mirrorNeedsUpdate(current, desired *networkingv1.Ingress) bool {

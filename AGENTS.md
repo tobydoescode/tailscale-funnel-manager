@@ -31,6 +31,7 @@ internal/
   auth/                     Bearer token middleware (constant-time compare)
   kube/                     Narrow typed k8s client wrapper (Ingresses)
   manager/                  Mirror Ingress builder + orphan reconciler
+  metrics/                  Minimal Prometheus text-format counters
   web/                      go:embed assets (index.html, app.js, style.css)
 .github/
   workflows/ci.yaml         CI pipeline
@@ -42,16 +43,19 @@ scripts/                    Shell helpers (docker-build-needed.sh)
 
 **Data flow**: Labeled Ingress → kube client lists → API returns service state → UI polls + toggles → handler patches companion annotation. Reconciler runs on interval, GCs orphans.
 
+**Run exactly one replica** — the reconciler has no leader election; multiple replicas would race on mirror updates/deletes.
+
 **Routes**:
 | Path | Auth | Purpose |
 |------|------|---------|
 | `GET /` | no | Embedded UI (HTML/CSS/JS) |
 | `GET /healthz` | no | Liveness probe |
 | `GET /readyz` | no | 503 if can't list Ingresses |
+| `GET /metrics` | no | Prometheus counters (hand-rolled, `internal/metrics`) |
 | `GET /api/services` | bearer | List opted-in services with funnel state |
 | `POST /api/services/{namespace}/{name}/funnel` | bearer | Toggle funnel on/off (`{"enabled": true\|false}`) |
 
-Auth always active — `FUNNEL_MANAGER_TOKEN` is required.
+Auth always active — `FUNNEL_MANAGER_TOKEN` is required. Repeated wrong-token attempts from one IP are answered 429 for a cooldown window.
 
 **Opt-in**: Source Ingress labeled `funnel-manager.toby.cloud/enabled=true` with annotations for hostname, optional tags, optional path-prefix. Companion Ingress mirrors rules with `ingressClassName: tailscale`.
 

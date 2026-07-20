@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -14,16 +15,16 @@ import (
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/auth"
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/kube"
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/manager"
+	"github.com/tobydoescode/tailscale-funnel-manager/internal/metrics"
 	"github.com/tobydoescode/tailscale-funnel-manager/internal/web"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	token := os.Getenv("FUNNEL_MANAGER_TOKEN")
 	if token == "" {
-		logger.Error("FUNNEL_MANAGER_TOKEN env var is required")
+		slog.Error("FUNNEL_MANAGER_TOKEN env var is required")
 		os.Exit(1)
 	}
 
@@ -44,7 +45,7 @@ func main() {
 	if v := os.Getenv("FUNNEL_MANAGER_RECONCILE_INTERVAL"); v != "" {
 		parsed, err := time.ParseDuration(v)
 		if err != nil {
-			logger.Error("invalid FUNNEL_MANAGER_RECONCILE_INTERVAL", "value", v, "err", err)
+			slog.Error("invalid FUNNEL_MANAGER_RECONCILE_INTERVAL", "value", v, "err", err)
 			os.Exit(1)
 		}
 		reconcileInterval = parsed
@@ -52,7 +53,7 @@ func main() {
 
 	client, err := kube.NewClient(kubeconfig)
 	if err != nil {
-		logger.Error("failed to build kubernetes client", "err", err)
+		slog.Error("failed to build kubernetes client", "err", err)
 		os.Exit(1)
 	}
 
@@ -69,11 +70,15 @@ func main() {
 	}))
 	mux.Handle("GET /readyz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := client.Ready(r.Context()); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			// Log the detail; the response body must not leak cluster
+			// internals to unauthenticated callers.
+			slog.Error("readiness check failed", "err", err)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
+	mux.Handle("GET /metrics", metrics.Handler())
 
 	authed := auth.Bearer(token)
 	mux.Handle("GET /api/services", authed(http.HandlerFunc(handler.ListServices)))
@@ -81,7 +86,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           securityHeaders(observe(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -92,11 +97,15 @@ func main() {
 	defer stop()
 
 	reconciler := &manager.Reconciler{Client: client, DefaultTags: defaultTags, Interval: reconcileInterval}
-	go reconciler.Run(ctx)
+	reconcilerDone := make(chan struct{})
+	go func() {
+		reconciler.Run(ctx)
+		close(reconcilerDone)
+	}()
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", addr)
+		slog.Info("listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -104,18 +113,65 @@ func main() {
 
 	select {
 	case err := <-errCh:
-		logger.Error("server error", "err", err)
+		slog.Error("server error", "err", err)
 		os.Exit(1)
 	case <-ctx.Done():
-		logger.Info("shutting down")
+		slog.Info("shutting down")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("shutdown error", "err", err)
+		slog.Error("shutdown error", "err", err)
 		os.Exit(1)
 	}
+	<-reconcilerDone
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// observe counts every request in metrics and access-logs everything except
+// probe and scrape endpoints, which would drown the log.
+func observe(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+		next.ServeHTTP(sw, r)
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
+		metrics.HTTPRequests.Inc(route, strconv.Itoa(sw.status))
+		switch r.URL.Path {
+		case "/healthz", "/readyz", "/metrics":
+			return
+		}
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", sw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
+		)
+	})
 }
 
 func kubeconfigPath() string {
