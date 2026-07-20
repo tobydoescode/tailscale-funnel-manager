@@ -47,6 +47,10 @@ All `/api/*` endpoints require `Authorization: Bearer <token>`.
 | POST   | `/api/services/{namespace}/{name}/funnel` | Body `{"enabled": true\|false}` — first call creates the companion, subsequent calls patch the annotation |
 | GET    | `/healthz` | Liveness (no auth) |
 | GET    | `/readyz` | Readiness — lists Ingresses to confirm RBAC (no auth) |
+| GET    | `/metrics` | Prometheus counters: HTTP requests, reconcile runs, orphans deleted (no auth) |
+
+Repeated failed auth attempts from one IP are rate limited (10/minute, then
+429 for the remainder of the window).
 
 The UI at `/` polls `/api/services` every 10s and calls `POST /funnel` when a
 toggle is flipped.
@@ -104,7 +108,7 @@ Override `FUNNEL_MANAGER_TOKEN` or `FUNNEL_MANAGER_ADDR` if needed. To check
 the API from another shell, run `task dev:services`.
 The kube identity in the selected context needs the Ingress RBAC listed below.
 
-Version is pinned in `Taskfile.yml` (`VERSION: x.y.z`). CI runs tests,
+Local image versions are derived from `git describe --tags`. CI runs tests,
 coverage reporting, source security checks, image smoke tests, Trivy image
 scans, multi-arch image builds (`linux/amd64`, `linux/arm64`), and manifest
 merge via `.github/workflows/ci.yaml`.
@@ -117,7 +121,8 @@ Deployed into the home-lab k3s cluster via Flux manifests kept in the
 after a new build if you want the cluster to pull it.
 
 The Deployment runs as a nonroot distroless container (UID 65532), with
-read-only root filesystem and all capabilities dropped.
+read-only root filesystem and all capabilities dropped. Run exactly one
+replica — the reconciler has no leader election.
 
 ## Project layout
 
@@ -131,5 +136,6 @@ read-only root filesystem and all capabilities dropped.
     ├── auth/       bearer-token middleware
     ├── kube/       narrow kubernetes client wrapper
     ├── manager/    mirror Ingress builder + orphan reconciler
+    ├── metrics/    minimal Prometheus text-format counters
     └── web/        embedded HTML/CSS/JS UI
 ```

@@ -66,7 +66,18 @@ func (f *fakeKube) GetMirror(_ context.Context, ns, sourceName string) (*network
 	if f.getMirrorErr != nil {
 		return nil, f.getMirrorErr
 	}
-	return f.mirrors[f.key(ns, manager.MirrorName(sourceName))], nil
+	m := f.mirrors[f.key(ns, manager.MirrorName(sourceName))]
+	if m == nil {
+		return nil, nil
+	}
+	// Mimic the real client's ownership checks.
+	if m.Labels[manager.LabelManaged] != "true" {
+		return nil, fmt.Errorf("ingress %s/%s exists but is not managed by funnel-manager", ns, m.Name)
+	}
+	if m.Labels[manager.LabelSource] != sourceName {
+		return nil, fmt.Errorf("ingress %s/%s exists but source label is %q, want %q", ns, m.Name, m.Labels[manager.LabelSource], sourceName)
+	}
+	return m, nil
 }
 
 func (f *fakeKube) CreateMirror(_ context.Context, m *networkingv1.Ingress) error {
@@ -353,6 +364,68 @@ func TestSetFunnel_PatchesAfterCreateConflict(t *testing.T) {
 	}
 	if got := fk.mirrors["litellm/litellm-funnel"].Annotations[manager.TSFunnel]; got != "true" {
 		t.Fatalf("funnel annotation = %q, want true", got)
+	}
+}
+
+func TestSetFunnel_ConflictWithUnmanagedIngressDoesNotPatch(t *testing.T) {
+	// The create conflict is caused by an unmanaged Ingress that appeared
+	// after the initial GetMirror returned nothing. The handler must re-run
+	// the ownership checks instead of blindly patching by name.
+	fk := newFake(sampleSource())
+	fk.createConflictMirror = &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "litellm-funnel", Namespace: "litellm"},
+	}
+	fk.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "ingresses"}, "litellm-funnel")
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	rec := postFunnel(h, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if fk.patches != 0 {
+		t.Fatalf("patches = %d, want 0", fk.patches)
+	}
+}
+
+func TestSetFunnel_RejectsOversizedBody(t *testing.T) {
+	fk := newFake(sampleSource())
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	body := `{"enabled":true,` + strings.Repeat(" ", 5000) + `}`
+	rec := postFunnelBody(h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fk.mirrors) != 0 {
+		t.Fatalf("mirror should not be created for oversized body")
+	}
+}
+
+func TestListServices_IgnoresMirrorsWithMismatchedLabels(t *testing.T) {
+	fk := newFake(sampleSource())
+	// A managed mirror whose name doesn't match its source label must not
+	// be joined to the source.
+	fk.mirrors["litellm/weird-name"] = &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "weird-name",
+			Namespace: "litellm",
+			Labels: map[string]string{
+				manager.LabelManaged: "true",
+				manager.LabelSource:  "litellm",
+			},
+			Annotations: map[string]string{manager.TSFunnel: "true"},
+		},
+	}
+	h := NewHandler(Config{Kube: fk, DefaultTags: "tag:default"})
+
+	rec := httptest.NewRecorder()
+	h.ListServices(rec, httptest.NewRequest("GET", "/api/services", nil))
+	var views []ServiceView
+	if err := json.NewDecoder(rec.Body).Decode(&views); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if views[0].FunnelEnabled {
+		t.Errorf("mismatched mirror must not mark the source enabled")
 	}
 }
 

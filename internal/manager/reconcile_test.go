@@ -122,6 +122,23 @@ func TestReconciler_KeepsMirrorOnTransientError(t *testing.T) {
 	}
 }
 
+func TestReconciler_SkipsMirrorWhenNameMismatchesSourceLabel(t *testing.T) {
+	// DeleteMirror derives the target name from the source label; if the
+	// label disagrees with the mirror's actual name, deleting would hit a
+	// different Ingress. The reconciler must not act on such a mirror.
+	weird := mirror("litellm", "litellm")
+	weird.Name = "weird-name"
+	fc := &fakeReconcileClient{mirrors: []networkingv1.Ingress{weird}}
+	r := &Reconciler{Client: fc}
+	r.reconcileOnce(context.Background())
+	if len(fc.deleted) != 0 {
+		t.Errorf("expected no deletions; got %v", fc.deleted)
+	}
+	if len(fc.updated) != 0 {
+		t.Errorf("expected no updates; got %d", len(fc.updated))
+	}
+}
+
 func TestReconciler_SkipsMirrorWithoutSourceLabel(t *testing.T) {
 	// A mirror missing LabelSource is either pre-this-version or
 	// externally authored; the reconciler should not guess its owner.

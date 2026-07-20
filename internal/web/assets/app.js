@@ -8,6 +8,8 @@
   const refreshBtn = document.getElementById("refresh");
   const signoutBtn = document.getElementById("signout");
 
+  let toggling = false;
+
   function getToken() {
     let t = sessionStorage.getItem(TOKEN_KEY);
     if (!t) {
@@ -82,6 +84,7 @@
     input.type = "checkbox";
     input.checked = !!svc.funnelEnabled;
     input.disabled = !!svc.error;
+    input.setAttribute("aria-label", `funnel for ${svc.namespace}/${svc.name}`);
     const slider = document.createElement("span");
     slider.className = "slider";
     label.append(input, slider);
@@ -107,18 +110,21 @@
     input.addEventListener("change", async () => {
       const desired = input.checked;
       input.disabled = true;
+      toggling = true;
       try {
         setStatus(`${desired ? "enabling" : "disabling"} ${svc.namespace}/${svc.name}…`);
-        await apiFetch(`/api/services/${svc.namespace}/${svc.name}/funnel`, {
+        await apiFetch(`/api/services/${encodeURIComponent(svc.namespace)}/${encodeURIComponent(svc.name)}/funnel`, {
           method: "POST",
           body: JSON.stringify({ enabled: desired }),
         });
+        toggling = false;
         await refresh();
         setStatus(`${svc.namespace}/${svc.name} funnel ${desired ? "on" : "off"}`);
       } catch (e) {
         input.checked = !desired;
         setStatus(e.message, true);
       } finally {
+        toggling = false;
         input.disabled = !!svc.error;
       }
     });
@@ -160,5 +166,9 @@
   });
 
   refresh();
-  setInterval(refresh, POLL_MS);
+  // Skip the poll while a toggle is in flight — a full re-render would
+  // replace the row mid-request and clobber its pending state.
+  setInterval(() => {
+    if (!toggling) refresh();
+  }, POLL_MS);
 })();

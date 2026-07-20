@@ -2,6 +2,7 @@ package manager
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -354,6 +355,32 @@ func TestValidateSource(t *testing.T) {
 			src.Annotations[AnnPathPrefix] = prefix
 			if err := ValidateSource(src); err == nil {
 				t.Fatalf("expected error for path-prefix %q", prefix)
+			}
+		}
+	})
+	t.Run("hostname must be a DNS label", func(t *testing.T) {
+		for _, hostname := range []string{
+			"LiteLLM",
+			"lite.llm",
+			"lite llm",
+			"lite_llm",
+			"-litellm",
+			"litellm-",
+			strings.Repeat("a", 64),
+		} {
+			src := sourceIngress()
+			src.Annotations[AnnHostname] = hostname
+			if err := ValidateSource(src); err == nil {
+				t.Errorf("expected error for hostname %q", hostname)
+			}
+		}
+	})
+	t.Run("valid hostnames accepted", func(t *testing.T) {
+		for _, hostname := range []string{"litellm", "lite-llm-2", "a", strings.Repeat("a", 63)} {
+			src := sourceIngress()
+			src.Annotations[AnnHostname] = hostname
+			if err := ValidateSource(src); err != nil {
+				t.Errorf("unexpected error for hostname %q: %v", hostname, err)
 			}
 		}
 	})
